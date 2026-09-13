@@ -204,8 +204,9 @@ impl<
     }
 }
 
-/// The GATT server for one host profile. `name` is what [`host_name`] gave
-/// for it, so the GAP Device Name matches the advertisement.
+/// The GATT server, built once. The GAP Device Name stays the plain product
+/// name: rebuilding the server per profile to carry the profile there rebooted
+/// the keyboard on every switch, and hosts show the advertised name anyway.
 fn new_server<'a>(name: &'a str, device_config: &DeviceConfig<'static>, serial_number: &str) -> Server<'a> {
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name,
@@ -276,15 +277,14 @@ async fn run_ble_keyboard<
 
     let profile_manager = &mut profile_manager;
 
+    let server = new_server(product_name, device_config, serial_number);
+    let server = &server;
+
     let connection_loop = async {
         loop {
-            // The name carries the active profile, so the GATT server (whose
-            // GAP Device Name a host reads after connecting) is built per
-            // profile, right before advertising it.
+            // The advertised name carries the active profile.
             let profile = crate::state::current_profile();
             let name = host_name(product_name, profile);
-            let server = new_server(&name, device_config, serial_number);
-            let server = &server;
 
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.

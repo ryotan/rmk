@@ -18,12 +18,12 @@ const DONGLE_SEEKING: u8 = 1;
 /// appearance take the rest of the 31-byte legacy budget.
 pub(crate) const HOST_NAME_MAX: usize = 16;
 
-/// The name a host sees for `profile`: the product name with the profile
+/// The advertised name for `profile`: the product name with the profile
 /// appended the way the BT0/BT1/... keys name it ("Cornix (BT1)"), so a
 /// keyboard with several profiles shows which one it is pairing on. With a
 /// single profile the name is left alone. The product name is cut at a char
 /// boundary when the whole would not fit the advertisement, so the profile
-/// always survives.
+/// always survives. The GAP Device Name is not touched (see `new_server`).
 pub(crate) fn host_name(product_name: &str, profile: u8) -> heapless::String<HOST_NAME_MAX> {
     let mut suffix = heapless::String::<8>::new();
     if crate::NUM_BLE_PROFILE > 1 {
