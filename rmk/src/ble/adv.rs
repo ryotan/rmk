@@ -14,6 +14,34 @@ const RMK_ADV_COMPANY_ID: u16 = 0x5253;
 const SPLIT_PERIPHERAL: u8 = 0;
 const DONGLE_SEEKING: u8 = 1;
 
+/// Longest name a host advertisement can carry: flags, service UUIDs and the
+/// appearance take the rest of the 31-byte legacy budget.
+pub(crate) const HOST_NAME_MAX: usize = 16;
+
+/// The name a host sees for `profile`: the product name with the profile
+/// appended the way the BT0/BT1/... keys name it ("Cornix (BT1)"), so a
+/// keyboard with several profiles shows which one it is pairing on. With a
+/// single profile the name is left alone. The product name is cut at a char
+/// boundary when the whole would not fit the advertisement, so the profile
+/// always survives.
+pub(crate) fn host_name(product_name: &str, profile: u8) -> heapless::String<HOST_NAME_MAX> {
+    let mut suffix = heapless::String::<8>::new();
+    if crate::NUM_BLE_PROFILE > 1 {
+        // " (BT0)" to " (BT255)" always fits.
+        let _ = core::fmt::Write::write_fmt(&mut suffix, format_args!(" (BT{profile})"));
+    }
+    let room = HOST_NAME_MAX - suffix.len();
+    let mut name = heapless::String::new();
+    for c in product_name.chars() {
+        if name.len() + c.len_utf8() > room {
+            break;
+        }
+        let _ = name.push(c);
+    }
+    let _ = name.push_str(&suffix);
+    name
+}
+
 /// An advertisement, named for the peer meant to answer it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
@@ -146,6 +174,19 @@ mod tests {
         assert!(!fits(Adv::Host {
             name: "0123456789abcdefg"
         }));
+    }
+
+    #[test]
+    fn host_name_appends_the_profile_key_name() {
+        assert_eq!(super::host_name("Cornix", 0).as_str(), "Cornix (BT0)");
+        assert_eq!(super::host_name("Cornix", 2).as_str(), "Cornix (BT2)");
+    }
+
+    #[test]
+    fn host_name_keeps_the_profile_when_the_product_name_is_long() {
+        let name = super::host_name("0123456789abcdefg", 1);
+        assert_eq!(name.as_str(), "0123456789 (BT1)");
+        assert!(fits(Adv::Host { name: &name }));
     }
 
     #[test]

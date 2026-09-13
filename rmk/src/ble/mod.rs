@@ -16,7 +16,7 @@ use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
 
-use crate::ble::adv::{Adv, advertise};
+use crate::ble::adv::{Adv, advertise, host_name};
 use crate::ble::battery_service::BleBatteryServer;
 #[cfg(feature = "split")]
 use crate::ble::battery_service::BlePeripheralBatteryServer;
@@ -204,26 +204,11 @@ impl<
     }
 }
 
-/// Owns the GATT server and the profile manager, and advertises→connects→
-/// serves forever, joined with the stack runner and the sleep manager.
-async fn run_ble_keyboard<
-    #[cfg(feature = "host")] 'r,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
->(
-    stack: &Stack<'_, C, DefaultPacketPool>,
-    device_config: &DeviceConfig<'static>,
-    config: &BleBatteryConfig<'static>,
-    #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
-) -> ! {
-    let product_name = device_config.product_name;
-    #[cfg(feature = "_nrf_ble")]
-    let serial_number = crate::ble::nrf::get_serial_number();
-    #[cfg(not(feature = "_nrf_ble"))]
-    let serial_number = device_config.serial_number;
-
-    info!("Starting advertising and GATT service");
+/// The GATT server for one host profile. `name` is what [`host_name`] gave
+/// for it, so the GAP Device Name matches the advertisement.
+fn new_server<'a>(name: &'a str, device_config: &DeviceConfig<'static>, serial_number: &str) -> Server<'a> {
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name: product_name,
+        name,
         appearance: &appearance::human_interface_device::KEYBOARD,
     }))
     .unwrap();
@@ -256,7 +241,27 @@ async fn run_ble_keyboard<
             &heapless::String::try_from(device_config.manufacturer).unwrap(),
         )
         .unwrap();
-    let server = &server;
+    server
+}
+
+/// Owns the GATT server and the profile manager, and advertises→connects→
+/// serves forever, joined with the stack runner and the sleep manager.
+async fn run_ble_keyboard<
+    #[cfg(feature = "host")] 'r,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+>(
+    stack: &Stack<'_, C, DefaultPacketPool>,
+    device_config: &DeviceConfig<'static>,
+    config: &BleBatteryConfig<'static>,
+    #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
+) -> ! {
+    let product_name = device_config.product_name;
+    #[cfg(feature = "_nrf_ble")]
+    let serial_number = crate::ble::nrf::get_serial_number();
+    #[cfg(not(feature = "_nrf_ble"))]
+    let serial_number = device_config.serial_number;
+
+    info!("Starting advertising and GATT service");
 
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
@@ -273,19 +278,27 @@ async fn run_ble_keyboard<
 
     let connection_loop = async {
         loop {
+            // The name carries the active profile, so the GATT server (whose
+            // GAP Device Name a host reads after connecting) is built per
+            // profile, right before advertising it.
+            let profile = crate::state::current_profile();
+            let name = host_name(product_name, profile);
+            let server = new_server(&name, device_config, serial_number);
+            let server = &server;
+
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
             #[cfg(feature = "dongle")]
-            let adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
+            let adv = if profile == crate::ble::profile::DONGLE_PROFILE {
                 match profile_manager.active_bond_info() {
                     Some(info) => Adv::Directed(info.info.identity.addr),
                     None => Adv::DongleSeeking,
                 }
             } else {
-                Adv::Host { name: product_name }
+                Adv::Host { name: &name }
             };
             #[cfg(not(feature = "dongle"))]
-            let adv = Adv::Host { name: product_name };
+            let adv = Adv::Host { name: &name };
 
             // Wait for 10ms to ensure the USB is checked
             Timer::after_millis(10).await;
