@@ -9,6 +9,7 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(feature = "split")]
 use embassy_sync::channel::Channel;
+use embassy_sync::once_lock::OnceLock;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use rmk_types::ble::BleState;
@@ -16,7 +17,7 @@ use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
 
-use crate::ble::adv::{Adv, advertise, host_name};
+use crate::ble::adv::{Adv, HOST_NAME_MAX, advertise, host_name};
 use crate::ble::battery_service::BleBatteryServer;
 #[cfg(feature = "split")]
 use crate::ble::battery_service::BlePeripheralBatteryServer;
@@ -204,9 +205,22 @@ impl<
     }
 }
 
-/// The GATT server, built once. The GAP Device Name stays the plain product
-/// name: rebuilding the server per profile to carry the profile there rebooted
-/// the keyboard on every switch, and hosts show the advertised name anyway.
+/// The host name of every profile, built once: the GAP Device Name is a
+/// read-only attribute that borrows its value for the server's lifetime, so
+/// the names it is pointed at have to outlive the server.
+static HOST_NAMES: OnceLock<[heapless::String<HOST_NAME_MAX>; crate::NUM_BLE_PROFILE]> = OnceLock::new();
+
+/// The GAP Device Name characteristic. The GAP service is the first thing in
+/// the table (service declaration 1, characteristic declaration 2, value 3);
+/// the UUID check guards that assumption.
+fn device_name_characteristic(server: &Server<'_>) -> Option<Characteristic<heapless::String<HOST_NAME_MAX>>> {
+    let characteristic = server.server.table().find_characteristic_by_value_handle(3).ok()?;
+    (characteristic.uuid == characteristic::DEVICE_NAME.into()).then_some(characteristic)
+}
+
+/// The GATT server, built once. Rebuilding it per profile (to put the profile
+/// into the GAP Device Name) rebooted the keyboard on every switch; the name
+/// is re-pointed in place instead, see [`device_name_characteristic`].
 fn new_server<'a>(name: &'a str, device_config: &DeviceConfig<'static>, serial_number: &str) -> Server<'a> {
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name,
@@ -279,12 +293,25 @@ async fn run_ble_keyboard<
 
     let server = new_server(product_name, device_config, serial_number);
     let server = &server;
+    let host_names = HOST_NAMES.get_or_init(|| core::array::from_fn(|profile| host_name(product_name, profile as u8)));
+    let device_name = device_name_characteristic(server);
+    if device_name.is_none() {
+        warn!("GAP Device Name characteristic not found; only the advertisement names the profile");
+    }
 
     let connection_loop = async {
         loop {
-            // The advertised name carries the active profile.
+            // The name carries the active profile, both in the advertisement and
+            // in the GAP Device Name a host reads after connecting. The dongle
+            // profile has no host name and keeps the last one.
             let profile = crate::state::current_profile();
-            let name = host_name(product_name, profile);
+            let profile_name = host_names.get(profile as usize);
+            let name = profile_name.map(|n| n.as_str()).unwrap_or(product_name);
+            if let (Some(characteristic), Some(profile_name)) = (&device_name, profile_name)
+                && let Err(e) = characteristic.set_ro(&server.server, profile_name)
+            {
+                warn!("Failed to set the GAP Device Name: {:?}", e);
+            }
 
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
@@ -295,10 +322,10 @@ async fn run_ble_keyboard<
                     None => Adv::DongleSeeking,
                 }
             } else {
-                Adv::Host { name: &name }
+                Adv::Host { name }
             };
             #[cfg(not(feature = "dongle"))]
-            let adv = Adv::Host { name: &name };
+            let adv = Adv::Host { name };
 
             // Wait for 10ms to ensure the USB is checked
             Timer::after_millis(10).await;

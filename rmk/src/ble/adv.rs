@@ -23,7 +23,7 @@ pub(crate) const HOST_NAME_MAX: usize = 16;
 /// keyboard with several profiles shows which one it is pairing on. With a
 /// single profile the name is left alone. The product name is cut at a char
 /// boundary when the whole would not fit the advertisement, so the profile
-/// always survives. The GAP Device Name is not touched (see `new_server`).
+/// is never cut off. The same name goes into the GAP Device Name.
 pub(crate) fn host_name(product_name: &str, profile: u8) -> heapless::String<HOST_NAME_MAX> {
     let mut suffix = heapless::String::<8>::new();
     if crate::NUM_BLE_PROFILE > 1 {
