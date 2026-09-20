@@ -1,0 +1,108 @@
+# A modifier released while another morse key is still undecided.
+#
+# The modifier comes from a morse key already resolved as hold: MT(B, LShift)@(1,1),
+# held past its timeout. The undecided key is MT(C, LGui)@(1,7) on the other hand.
+# A@(1,0) is a plain key. QMK and ZMK hold the modifier's release back until the
+# undecided key resolves, so "Shift down, C down, Shift up, C up" types a capital C.
+
+keyboard = "boards/split.toml"
+
+[behavior.morse]
+unilateral_tap = false
+permissive_hold = true
+enable_flow_tap = false
+
+# Shift is released before the mod-tap letter: the tap still carries Shift.
+[[test]]
+name = "shift_released_before_mod_tap_letter"
+steps = [
+  { press = [1, 1] },
+  { delay = 300 },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { release = [1, 7] },
+]
+expect = [["LShift"], ["LShift", "C"], ["C"], []]
+
+# The same with hold_on_other_press: Shift resolves on the C press instead of by timeout.
+[[test]]
+name = "shift_released_before_mod_tap_letter_hold_on_other_press"
+behavior.morse = { permissive_hold = false, hold_on_other_press = true }
+steps = [
+  { press = [1, 1] },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { release = [1, 7] },
+]
+expect = [["LShift"], ["LShift", "C"], ["C"], []]
+
+# A plain key pressed after the deferred release fires after it, so "Shift+C, then a"
+# stays "Ca" and not "CA".
+[[test]]
+name = "plain_key_after_deferred_release_keeps_order"
+steps = [
+  { press = [1, 1] },
+  { delay = 300 },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { press = [1, 0] },
+  { release = [1, 7] },
+  { release = [1, 0] },
+]
+expect = [["LShift"], ["LShift", "C"], ["C"], ["C", "A"], ["A"], []]
+
+# Pressing the modifier again while its release is deferred cancels the release:
+# the host never saw it go up.
+[[test]]
+name = "repress_cancels_deferred_release"
+steps = [
+  { press = [1, 1] },
+  { delay = 300 },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { press = [1, 1] },
+  { release = [1, 7] },
+  { release = [1, 1] },
+]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]
+
+# The undecided key resolves as hold by timeout: the deferred release fires right after.
+[[test]]
+name = "deferred_release_fires_after_hold_timeout"
+steps = [
+  { press = [1, 1] },
+  { delay = 300 },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { delay = 300 },
+  { release = [1, 7] },
+]
+expect = [["LShift"], ["LShift", "LGui"], ["LGui"], []]
+
+# A same-hand key resolves the letter as a tap (unilateral tap) while Shift's release is
+# deferred. The release goes out before the new key, so that key is not shifted.
+[[test]]
+name = "same_hand_key_after_deferred_release_is_not_shifted"
+behavior.morse = { unilateral_tap = true }
+steps = [
+  { press = [1, 1] },
+  { delay = 300 },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { press = [1, 10] },
+  { release = [1, 7] },
+  { release = [1, 10] },
+]
+expect = [["LShift"], ["LShift", "C"], ["C"], ["C", "Y"], ["Y"], []]
+
+# Control: the letter is released first, nothing is deferred.
+[[test]]
+name = "mod_tap_letter_released_first"
+steps = [
+  { press = [1, 1] },
+  { delay = 300 },
+  { press = [1, 7] },
+  { release = [1, 7] },
+  { release = [1, 1] },
+]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]

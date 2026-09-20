@@ -397,6 +397,8 @@ impl<'a> Keyboard<'a> {
         } else {
             self.process_key_action(key_action, event, false, event_time).await
         }
+
+        self.flush_deferred_releases().await;
     }
 
     async fn process_key_action(
@@ -406,6 +408,22 @@ impl<'a> Keyboard<'a> {
         is_combo: bool,
         event_time: Instant,
     ) {
+        // A modifier key pressed again while its release is still deferred: the host never saw
+        // it go up, so drop the deferred release and treat the key as held all along.
+        if event.pressed
+            && let Some(k) = self.held_buffer.find_pos_mut(event.pos)
+            && let KeyState::ModifierReleaseDeferred(action) = k.state
+        {
+            debug!(
+                "Re-pressed a modifier key with a deferred release, keep it held: {:?}",
+                event
+            );
+            k.state = KeyState::ProcessedButReleaseNotReportedYet(action);
+            k.event = event;
+            k.press_time = event_time;
+            return;
+        }
+
         // First, make the decision for current key and held keys
         let (decision_for_current_key, decisions) = self.make_decisions_for_keys(key_action, event);
 
@@ -654,6 +672,20 @@ impl<'a> Keyboard<'a> {
                     // Check if the normal keys in the buffer should be triggered.
                     let trigger_normal = matches!(decision_for_current_key, KeyBehaviorDecision::CleanBuffer);
 
+                    // A deferred modifier release goes out as soon as no morse key is undecided,
+                    // even when the current key is not cleaning the buffer
+                    if let Some(held_key) = self.held_buffer.find_pos(pos)
+                        && let KeyState::ModifierReleaseDeferred(action) = held_key.state
+                    {
+                        if trigger_normal || !self.has_unresolved_morse_key() {
+                            let event = held_key.event;
+                            let _ = self.held_buffer.remove_if(|k| k.event.pos == pos);
+                            debug!("Report deferred modifier release: {:?}", event);
+                            self.process_key_action_normal(action, event).await;
+                        }
+                        continue;
+                    }
+
                     if trigger_normal && let Some(held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
                         debug!("Cleaning buffered normal key");
                         let action = if keyboard_state_updated {
@@ -714,12 +746,18 @@ impl<'a> Keyboard<'a> {
             self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
 
             // Check all unresolved held keys, calculate their decision one-by-one
-            for held_key in self
-                .held_buffer
-                .keys
-                .iter()
-                .filter(|k| matches!(k.state, KeyState::Pressed(_) | KeyState::Released(_)))
-            {
+            for held_key in self.held_buffer.keys.iter().filter(|k| {
+                matches!(
+                    k.state,
+                    KeyState::Pressed(_) | KeyState::Released(_) | KeyState::ModifierReleaseDeferred(_)
+                )
+            }) {
+                // A deferred modifier release is fired like a buffered normal key, in event order
+                if matches!(held_key.state, KeyState::ModifierReleaseDeferred(_)) {
+                    let _ = decisions.push((held_key.event.pos, HeldKeyDecision::Normal));
+                    continue;
+                }
+
                 // Releasing a key is already buffered
                 if !event.pressed && held_key.action == *key_action {
                     debug!("Releasing a held key: {:?}", event);

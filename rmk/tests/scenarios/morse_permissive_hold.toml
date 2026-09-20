@@ -265,10 +265,10 @@ steps = [
   { delay = 100 },
   { release = [1, 8] },  # Release D
   { delay = 50 },
-  { release = [1, 1] },  # Release B
-  { release = [1, 7] },  # Release C
+  { release = [1, 1] },  # Release B: its Shift release waits for C to resolve
+  { release = [1, 7] },  # Release C -> shifted C, then the Shift release
 ]
-expect = [["A"], [], ["LShift"], ["LShift", "D"], ["LShift"], [], ["C"], []]
+expect = [["A"], [], ["LShift"], ["LShift", "D"], ["LShift"], ["LShift", "C"], ["C"], []]
 
 [[test]]
 name = "flow_tap"
