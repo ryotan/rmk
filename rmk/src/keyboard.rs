@@ -1362,7 +1362,12 @@ impl<'a> Keyboard<'a> {
             Action::Light(_light_action) => warn!("Light controll is not supported"),
             Action::KeyboardControl(c) => self.process_action_keyboard_control(c, event).await,
             Action::Special(special_key) => self.process_action_special(special_key, event).await,
-            Action::User(id) => self.process_user(id, event).await,
+            Action::User(id) => {
+                self.process_user(id, event).await;
+                // A User key is a real action: it consumes pending one-shots like any other
+                self.update_osm(event);
+                self.update_osl(event);
+            }
             Action::TriLayerLower => {
                 // Tri-layer lower, turn layer 1 on and update layer state
                 self.process_action_layer_switch(1, event);

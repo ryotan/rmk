@@ -1,0 +1,38 @@
+# A User key (BLE profile switch and friends) consumes a one-shot layer or
+# a one-shot modifier like any other action, so the key after it is back on
+# the base layer and has no modifier.
+#
+# Run these with nextest (one process per test), as CI does. The simulator
+# has no receiver for BLE_PROFILE_CHANNEL (capacity 1), so the second User
+# key tap in one process blocks in `send().await` and its test times out.
+
+[layout]
+rows = 1
+cols = 5
+map = """
+(0,0)  (0,1)  (0,2)  (0,3)  (0,4)
+"""
+
+[[keymap.layer]]
+keys = "OSL(1)  A  B  OSM(LShift)  User0"
+
+[[keymap.layer]]
+keys = "No  User0  No  No  No"
+
+[[test]]
+name = "osl_consumed_by_user_key"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["B"], []]
+
+[[test]]
+name = "osm_consumed_by_user_key"
+steps = [
+  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["B"], []]
