@@ -1,5 +1,6 @@
 use embassy_time::{Duration, Instant};
 use rmk_types::action::{Action, KeyAction};
+use rmk_types::keycode::HidKeyCode;
 use rmk_types::morse::{HOLD, MorseMode, MorsePattern, TAP};
 
 use crate::event::KeyboardEvent;
@@ -52,7 +53,7 @@ impl<'a> Keyboard<'a> {
             return;
         }
 
-        self.fire_held_non_morse_keys().await;
+        self.fire_deferred_keys().await;
     }
 
     pub(crate) async fn process_key_action_morse(
@@ -170,7 +171,7 @@ impl<'a> Keyboard<'a> {
                             }
                             self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
                             if !self.has_unresolved_morse_key() {
-                                self.fire_held_non_morse_keys().await;
+                                self.fire_deferred_keys().await;
                             }
                         } else if let Some(action) = final_action {
                             debug!("released prediction {:?} -> {:?}", pattern, action);
@@ -209,7 +210,7 @@ impl<'a> Keyboard<'a> {
                                 }
 
                                 if !self.has_unresolved_morse_key() {
-                                    self.fire_held_non_morse_keys().await;
+                                    self.fire_deferred_keys().await;
                                 }
                             }
                         }
@@ -226,6 +227,17 @@ impl<'a> Keyboard<'a> {
                     KeyState::ProcessedButReleaseNotReportedYet(action) => {
                         // Releasing a tap-hold action whose pressed HID report is already sent
                         info!("Releasing a morse action whose pressed action is already triggered");
+                        if Self::is_modifier_only_action(action) && self.has_unresolved_morse_key() {
+                            // Keep the modifiers on the host until the undecided morse key resolves,
+                            // so its tap is still modified. `fire_deferred_keys` reports the release.
+                            debug!("[morse] Deferring the release of modifier key: {:?}", event);
+                            if let Some(k) = self.held_buffer.find_pos_mut(event.pos) {
+                                k.state = KeyState::ModifierReleaseDeferred(action);
+                                k.event = event;
+                                k.press_time = Instant::now();
+                            }
+                            return;
+                        }
                         let _ = self.held_buffer.remove(event.pos);
                         // Process the release action
                         debug!("[morse] Releasing morse key: {:?}", event);
@@ -257,11 +269,20 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    pub(crate) async fn fire_held_non_morse_keys(&mut self) {
+    /// Fire what was held back while a morse key was undecided, in event order: presses of
+    /// non-morse keys and deferred modifier releases.
+    pub(crate) async fn fire_deferred_keys(&mut self) {
         self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
 
-        // Trigger all non morse keys in the buffer
-        while let Some(key) = self.held_buffer.remove_if(|k| !k.action.is_morse()) {
+        while let Some(key) = self
+            .held_buffer
+            .remove_if(|k| !k.action.is_morse() || matches!(k.state, KeyState::ModifierReleaseDeferred(_)))
+        {
+            if let KeyState::ModifierReleaseDeferred(action) = key.state {
+                debug!("Report deferred modifier release: {:?}", key);
+                self.process_key_action_normal(action, key.event).await;
+                continue;
+            }
             debug!("Trigger non-morse key: {:?}", key);
             let action = self.keymap.get_action_with_layer_cache(key.event);
             match action {
@@ -274,7 +295,30 @@ impl<'a> Keyboard<'a> {
         self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
     }
 
-    fn has_unresolved_morse_key(&self) -> bool {
+    /// Whether the action does nothing but hold modifiers: `MOD(...)`, the hold of `MT(No, ...)`,
+    /// or `WM(No, ...)`. Only such releases are deferred while a morse key is undecided.
+    fn is_modifier_only_action(action: Action) -> bool {
+        matches!(action, Action::Modifier(_) | Action::KeyWithModifier(HidKeyCode::No, _))
+    }
+
+    /// Report deferred modifier releases once no morse key is undecided any more. Runs after
+    /// every key event as the safety net for resolutions that bypass `fire_deferred_keys`.
+    pub(crate) async fn flush_deferred_releases(&mut self) {
+        let is_deferred = |k: &HeldKey| matches!(k.state, KeyState::ModifierReleaseDeferred(_));
+        if !self.held_buffer.keys.iter().any(is_deferred) || self.has_unresolved_morse_key() {
+            return;
+        }
+        self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
+        while let Some(key) = self.held_buffer.remove_if(is_deferred) {
+            if let KeyState::ModifierReleaseDeferred(action) = key.state {
+                debug!("Report deferred modifier release: {:?}", key);
+                self.process_key_action_normal(action, key.event).await;
+            }
+        }
+        self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
+    }
+
+    pub(crate) fn has_unresolved_morse_key(&self) -> bool {
         self.held_buffer.keys.iter().any(|k| {
             k.action.is_morse()
                 && matches!(

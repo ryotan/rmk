@@ -119,6 +119,12 @@ pub enum KeyState {
     /// but the release HID report is not sent yet (will be sent only when the corresponding
     /// key is really released).
     ProcessedButReleaseNotReportedYet(Action),
+
+    /// The key was released while another morse key was still undecided, and its action
+    /// only holds modifiers. The release HID report is held back until that key resolves,
+    /// so a tap decided later still carries the modifiers it was pressed under (as QMK and
+    /// ZMK do). `event` is the release event and `press_time` the release time.
+    ModifierReleaseDeferred(Action),
     // The Idle state is represented by the removal from the HeldBuffer
 }
 

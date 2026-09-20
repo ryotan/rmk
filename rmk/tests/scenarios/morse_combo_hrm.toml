@@ -132,8 +132,8 @@ steps = [
   { delay = 60 },
   { press = [1, 7] },    # Press MT(C, LGui)
   { delay = 20 },
-  { release = [1, 1] },  # Release B
-  { release = [1, 7] },  # Release C -> unilateral tap of LT(1, D) fires before B resolves
+  { release = [1, 1] },  # Release B: its Shift release waits for D and C to resolve
+  { release = [1, 7] },  # Release C -> unilateral tap of LT(1, D), then C, both shifted; then Shift up
   { release = [1, 8] },  # Release D
 ]
-expect = [["LShift"], [], ["D"], ["D", "C"], ["D"], []]
+expect = [["LShift"], ["LShift", "D"], ["LShift", "D", "C"], ["D", "C"], ["D"], []]
