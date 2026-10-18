@@ -400,8 +400,8 @@ async fn run_central_manager_task<
 ) -> Result<(), BleHostError<C::Error>> {
     let client = GattClient::<C, P, 10>::new(stack, conn).await?;
 
-    // Split link uses 2M PHY always.
-    update_ble_phy(stack, conn, PhyKind::Le2M).await;
+    // Use 1M PHY on the split link for receive margin.
+    update_ble_phy(stack, conn, PhyKind::Le1M).await;
 
     info!("Updating connection parameters for peripheral");
     update_conn_params(stack, conn, &default_split_conn_params()).await;
