@@ -741,31 +741,23 @@ pub(crate) async fn set_conn_params<
     stack: &Stack<'_, C, P>,
     conn: &GattConnection<'a, 'b, P>,
 ) {
-    let requests = [
-        // The first request is what Apple devices accept:
-        // https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
-        (Duration::from_millis(15), 30, Duration::from_secs(6)),
-        // The second request is for best performance
-        (Duration::from_micros(7500), 60, Duration::from_secs(6)),
-    ];
+    // Wait 5 seconds before requesting parameters to avoid connection drop.
+    embassy_time::Timer::after_secs(5).await;
 
-    for (interval, max_latency, supervision_timeout) in requests {
-        // Wait 5 seconds before each request to avoid connection drop
-        embassy_time::Timer::after_secs(5).await;
-
-        update_conn_params(
-            stack,
-            conn.raw(),
-            &RequestedConnParams {
-                min_connection_interval: interval,
-                max_connection_interval: interval,
-                max_latency,
-                supervision_timeout,
-                ..Default::default()
-            },
-        )
-        .await;
-    }
+    // Request parameters within Apple's accessory connection guidelines:
+    // https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
+    update_conn_params(
+        stack,
+        conn.raw(),
+        &RequestedConnParams {
+            min_connection_interval: Duration::from_millis(15),
+            max_connection_interval: Duration::from_millis(15),
+            max_latency: 30,
+            supervision_timeout: Duration::from_secs(6),
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Wait forever. This is because we want the conn params setting can be interrupted when the connection is lost.
     // So this task shouldn't quit after setting the conn params.
